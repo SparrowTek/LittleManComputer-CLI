@@ -8,13 +8,12 @@ import (
 	"strings"
 
 	"github.com/sparrowTek/LittleManComputer-CLI/compiler"
-	"github.com/sparrowTek/LittleManComputer-CLI/models"
 )
 
 var (
 	// Flags for the CLI
-	file  = flag.String("file", "", "Include the name of a file with the assembly code")
-	state RAM
+	file = flag.String("file", "", "Include the name of a file with the assembly code")
+	// state models.RAM
 )
 
 func main() {
@@ -33,12 +32,17 @@ func main() {
 func parseArgs(arg string) {
 	switch strings.ToLower(arg) {
 	case "compile":
-		compiler.Compile("test")
+		// state = compiler.Compile("test")
+		// fmt.Println("RAM: %v", state)
+
 		if *file == "" {
 			fmt.Println("COMPILE from args")
 		} else {
 			fmt.Println("COMPILE from file")
+			// compiler.CompileTerminalInput()
 		}
+
+		compiler.CompileTerminalInput()
 	case "run":
 		fmt.Println("RUN")
 	case "step":

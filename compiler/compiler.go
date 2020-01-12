@@ -2,13 +2,15 @@
 package compiler
 
 import (
+	"bufio"
 	"fmt"
+	"os"
 
 	"github.com/sparrowTek/LittleManComputer-CLI/models"
 )
 
-// Compile the assembly code for the given file
-func Compile(filePath string) models.RAM {
+// CompileFromFile compiles the assembly code for the given file
+func CompileFromFile(filePath string) models.RAM {
 	// file, err := os.Open(filePath)
 	// defer file.Close()
 
@@ -24,6 +26,20 @@ func Compile(filePath string) models.RAM {
 	printRegisters()
 
 	return make(map[int]models.Register)
+}
+
+// CompileTerminalInput compiles the assembly code entered by the user in their terminal emulator
+func CompileTerminalInput() {
+	buf := bufio.NewReader(os.Stdin)
+	fmt.Print("> ")
+	sentence, err := buf.ReadBytes('\n')
+	if err != nil {
+		fmt.Println(err)
+	} else {
+		fmt.Println(string(sentence))
+	}
+
+	printRegisters()
 }
 
 func printRegisters() {
