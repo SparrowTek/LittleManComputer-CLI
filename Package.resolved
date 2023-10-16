@@ -1,0 +1,23 @@
+{
+  "pins" : [
+    {
+      "identity" : "corelittlemancomputer",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/SparrowTek/CoreLittleManComputer.git",
+      "state" : {
+        "branch" : "main",
+        "revision" : "be48f405f272e4eb0a960d17ed7957a3d825904e"
+      }
+    },
+    {
+      "identity" : "swift-argument-parser",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-argument-parser.git",
+      "state" : {
+        "revision" : "8f4d2753f0e4778c76d5f05ad16c74f707390531",
+        "version" : "1.2.3"
+      }
+    }
+  ],
+  "version" : 2
+}
