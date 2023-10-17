@@ -11,7 +11,7 @@ let package = Package(
     ],
     targets: [
         .executableTarget(
-            name: "LittleManComputer",
+            name: "LMC",
             dependencies: [
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 "CoreLittleManComputer",
