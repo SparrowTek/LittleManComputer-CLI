@@ -9,10 +9,12 @@ final class REPLSession {
     private var state = ProgramState()
     private var inbox: [Int] = []
     private var traceTail = 10
+    private let history: CommandHistory
 
     init(context: CommandContext) {
         self.context = context
         self.presenter = StatePresenter(context: context)
+        self.history = CommandHistory()
     }
 
     func run(welcome: String?, script: String?) async throws {
@@ -31,6 +33,10 @@ final class REPLSession {
             guard let line = readLine(strippingNewline: true) else { break }
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty { continue }
+
+            // Add to history if not a duplicate of the last command
+            history.add(trimmed)
+
             do {
                 if try await !handle(line: trimmed) {
                     break
@@ -93,6 +99,9 @@ final class REPLSession {
         case "save":
             try await handleSaveCommand(Array(components.dropFirst()))
             return true
+        case "history":
+            handleHistoryCommand(Array(components.dropFirst()))
+            return true
         default:
             print("Unknown command: \(command). Type 'help' for options.")
             return true
@@ -145,35 +154,149 @@ final class REPLSession {
             throw CLIValidationError("Load or assemble a program first.")
         }
         let (maxCycles, speed, breakpoints) = parseRunOptions(arguments)
-        let request = ExecutionService.RunRequest(source: .snapshot(program.snapshot()),
-                                                  inbox: inbox,
-                                                  speed: speed,
-                                                  maxCycles: maxCycles,
-                                                  breakpoints: breakpoints,
-                                                  plainOutput: false,
-                                                  initialState: state)
-        let outcome = try await context.services.execution.run(request)
-        state = outcome.state
+
+        // Set up async event collection and display
+        let eventCollector = REPLEventCollector()
+        let eventObserver = REPLEventObserver(
+            outputHandler: { value in
+                // Display output immediately with a distinct marker
+                print("📤 Output: \(value)")
+                eventCollector.recordOutput(value)
+            },
+            breakpointHandler: { address in
+                // Display breakpoint hit immediately
+                print("⚠️ Breakpoint hit at mailbox \(address.rawValue.zeroPadded)")
+                eventCollector.recordBreakpoint(address)
+            },
+            inputHandler: {
+                // Could potentially prompt for input here in the future
+                print("📥 Input requested")
+            },
+            errorHandler: { message in
+                print("❌ Error: \(message)")
+                eventCollector.recordError(message)
+            }
+        )
+
+        // Prepare the execution with our event observer
+        let prepared = try context.services.execution.prepareEngine(
+            ExecutionService.RunRequest(
+                source: .snapshot(program.snapshot()),
+                inbox: inbox,
+                speed: speed,
+                maxCycles: maxCycles,
+                breakpoints: breakpoints,
+                plainOutput: false,
+                initialState: state
+            ),
+            additionalObserver: eventObserver
+        )
+
+        // Run the engine
+        do {
+            if let speed = speed {
+                let schedule = ExecutionSchedule.hertz(speed)
+                try await prepared.engine.run(schedule: schedule, maxCycles: maxCycles)
+            } else {
+                _ = try prepared.engine.runUntilHalt(maxCycles: maxCycles)
+            }
+        } catch let error as ExecutionError {
+            if case .breakpointHit = error {
+                // Breakpoint already displayed by observer
+            } else {
+                throw error
+            }
+        }
+
+        // Update state
+        state = prepared.engine.state
         inbox = state.inbox
+
+        // Display final state
         presenter.renderState(state: state,
                               program: program,
                               highlight: state.counter,
                               includeLabels: !context.compactOutput,
                               forcePlain: context.globalOptions.plain)
         presenter.printTrace(entries: state.trace, limit: traceTail, forcePlain: context.globalOptions.plain)
-        if let breakpoint = outcome.breakpoint {
-            print("Breakpoint hit at mailbox \(breakpoint.rawValue.zeroPadded)")
+
+        // Show summary of events if any occurred
+        let outputs = eventCollector.getOutputs()
+        if !outputs.isEmpty && outputs.count > 1 {
+            print("\nTotal outputs produced: \(outputs.count)")
         }
     }
 
     private func stepProgram(arguments: [String]) async throws {
+        guard let program else {
+            throw CLIValidationError("Load or assemble a program first.")
+        }
+
         let steps: Int
         if let first = arguments.first, let value = Int(first) {
             steps = max(1, value)
         } else {
             steps = 1
         }
-        try await runProgram(arguments: ["--max", String(steps)])
+
+        // Set up async event display for stepping
+        let eventCollector = REPLEventCollector()
+        let eventObserver = REPLEventObserver(
+            outputHandler: { value in
+                print("📤 Output: \(value)")
+                eventCollector.recordOutput(value)
+            },
+            breakpointHandler: { address in
+                print("⚠️ Breakpoint hit at mailbox \(address.rawValue.zeroPadded)")
+                eventCollector.recordBreakpoint(address)
+            },
+            inputHandler: {
+                print("📥 Input requested")
+            },
+            errorHandler: { message in
+                print("❌ Error: \(message)")
+                eventCollector.recordError(message)
+            }
+        )
+
+        // Get any breakpoints from run options
+        let (_, _, breakpoints) = parseRunOptions(arguments)
+
+        // Prepare and execute
+        let prepared = try context.services.execution.prepareEngine(
+            ExecutionService.RunRequest(
+                source: .snapshot(program.snapshot()),
+                inbox: inbox,
+                speed: nil,
+                maxCycles: steps,
+                breakpoints: breakpoints,
+                plainOutput: false,
+                initialState: state
+            ),
+            additionalObserver: eventObserver
+        )
+
+        do {
+            _ = try prepared.engine.runUntilHalt(maxCycles: steps)
+        } catch let error as ExecutionError {
+            if case .breakpointHit = error {
+                // Already displayed by observer
+            } else {
+                throw error
+            }
+        }
+
+        // Update state
+        state = prepared.engine.state
+        inbox = state.inbox
+
+        // Display final state
+        presenter.renderState(state: state,
+                              program: program,
+                              highlight: state.counter,
+                              includeLabels: !context.compactOutput,
+                              forcePlain: context.globalOptions.plain)
+        presenter.printTrace(entries: state.trace, limit: min(steps, traceTail), forcePlain: context.globalOptions.plain)
     }
 
     private func showState(highlight: Int?) {
@@ -324,6 +447,7 @@ final class REPLSession {
           break remove <addr...>     Remove persistent breakpoints
           break clear                Clear all breakpoints for current program
           break list                 List breakpoints for current program
+          history [N|clear|search]   Show command history (last N entries)
           help                       Show this help message
           quit                       Exit the REPL
         """
@@ -336,6 +460,41 @@ private struct CLIValidationError: Error, CustomStringConvertible {
 }
 
 extension REPLSession {
+    private func handleHistoryCommand(_ args: [String]) {
+        if let first = args.first {
+            switch first.lowercased() {
+            case "clear":
+                history.clear()
+                print("Command history cleared.")
+            case "search":
+                guard args.count > 1 else {
+                    print("Usage: history search <pattern>")
+                    return
+                }
+                let pattern = args.dropFirst().joined(separator: " ")
+                let matches = history.search(containing: pattern)
+                if matches.isEmpty {
+                    print("No matching commands found.")
+                } else {
+                    print("Matching commands:")
+                    for cmd in matches {
+                        print("  \(cmd)")
+                    }
+                }
+            default:
+                if let count = Int(first) {
+                    print(history.formatHistory(numbered: true, recent: count))
+                } else {
+                    print("Invalid history option: \(first)")
+                    print("Usage: history [N|clear|search <pattern>]")
+                }
+            }
+        } else {
+            // Show recent history with default count
+            print(history.formatHistory(numbered: true, recent: 20))
+        }
+    }
+
     private func handleBreakpointCommand(_ args: [String]) async throws {
         guard let program = program else {
             print("No program loaded. Use 'load' or 'assemble' first.")
